@@ -1,0 +1,107 @@
+#include "mbed.h"
+#include "Camera_LS_Y201.h"
+#include "SDFileSystem.h"
+#include "DHT.h"
+
+#define FILENAME    "/sd/IMG_%04d.jpg"
+
+SDFileSystem fs(P1_2, P1_1, P3_0, P1_0, "sd");  //Pinagem do cartão SD (SSP0)
+//SDFileSystem fs(D11, D12, D13, D10,"sd");     //Pinagem do cartão SD (SSP1)
+
+Camera_LS_Y201 cam1(D1, D0);    //Pinagem da Câmera
+
+DigitalOut myled(LED2);         //Led para sinalizar foto capturada
+
+DHT sensor(D7,SEN11301P);       //Pinagem do Sensor de temperatura e umidade
+
+
+typedef struct work {
+    FILE *fp;
+} work_t;
+
+work_t work;
+
+
+void callback_func(int done, int total, uint8_t *buf, size_t siz)
+{
+    fwrite(buf, siz, 1, work.fp);
+
+    static int n = 0;
+    int tmp = done * 100 / total;
+    if (n != tmp) {
+        n = tmp;
+        printf("Salvando...: %3d%% \r\n", n);
+    }
+}
+
+
+int capture(Camera_LS_Y201 *cam, char *filename)
+{
+    //Capturar imagem
+    if (cam->takePicture() != 0) {
+        return -1;
+    }
+    printf("Imagem capturada. \r\n");
+
+    //Salvar no cartão
+    work.fp = fopen(filename, "wb");
+    if (work.fp == NULL) {
+        return -2;
+    }
+    printf("%s \r\n", filename);
+    
+    if (cam->readJpegFileContent(callback_func) != 0) {
+        fclose(work.fp);
+        return -3;
+    }
+    fclose(work.fp);
+    
+    cam->stopTakingPictures();
+
+    return 0;
+}
+
+
+int main(void)
+{
+    myled = 1;
+    int err;
+    printf("deBugger \r\n");
+    printf("Preparando... \r\n");
+    wait(1);
+    FILE *fp;
+
+    if (cam1.reset() == 0) {
+        printf("Camera OK \r\n");
+    } else {
+        printf("FALHA NA CAMERA  \r\n");
+    }
+    wait(1);
+    int cnt = 0;
+    
+    while (1) {
+        char fname[64];
+        snprintf(fname, sizeof(fname) - 1, FILENAME, cnt);
+        int r = capture(&cam1, fname);
+        if (r == 0) {
+            printf("[%04d]:OK. \r\n", cnt);
+            myled = 0;
+            wait(0.5);
+            myled = 1;
+        } else {
+            printf("[%04d]:NG. (code=%d) \r\n", cnt, r);
+            error("Falha ao capturar imagem");
+        }
+        err = sensor.readData();
+        if (err == 0) {
+            fp = fopen("/sd/Dados_Sensor.csv", "a");
+            fprintf(fp, "%4.2f; %4.2f \n", sensor.ReadTemperature(CELCIUS),sensor.ReadHumidity());
+            wait(0.05);
+            fclose(fp);
+            printf("Temperatura: %4.2f C \r\n",sensor.ReadTemperature(CELCIUS));
+            printf("Umidade: %4.2f \r\n",sensor.ReadHumidity());
+        }
+        wait(10);
+        cnt++;
+    }
+}
